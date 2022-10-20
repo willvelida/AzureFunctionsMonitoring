@@ -7,9 +7,6 @@ param applicationName string = uniqueString(resourceGroup().id)
 @description('The name of the App Service Plan that will be deployed')
 param appServicePlanName string = '${applicationName}-asp'
 
-@description('The name of the Function App that will be deployed')
-param functionAppName string = '${applicationName}-func'
-
 @description('The name of the App Insights namespace that will be deployed')
 param appInsightsNamespaceName string = '${applicationName}-appins'
 
@@ -22,11 +19,12 @@ param cosmosDbAccountName string = '${applicationName}-cosmos'
 @description('The name of the Service Bus that will be deployed')
 param serviceBusName string = '${applicationName}sb'
 
-@description('Name of the storage account provisioned for use by the Function')
-param storageAccountName string = take(toLower(replace('${applicationName}func', '-', '')), 24)
-
 param lastDeployed string = utcNow()
 
+var orderGeneratorName = '${applicationName}-order-generator'
+var orderGeneratorStorageName = take(toLower(replace('${applicationName}genfunc', '-', '')), 24)
+var orderProcessorName = '${applicationName}-order-processor'
+var orderProcessorStorageName = take(toLower(replace('${applicationName}profunc', '-', '')), 24)
 var runtime = 'dotnet'
 var cosmosDBName = 'OrdersDB'
 var cosmosContainerName = 'Orders'
@@ -67,8 +65,8 @@ module appInsights 'modules/appInsights.bicep' = {
   }
 }
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2022-05-01' = {
-  name: storageAccountName
+resource orderGeneratorStorage 'Microsoft.Storage/storageAccounts@2022-05-01' = {
+  name: orderGeneratorStorageName
   location: location
   tags: tags
   sku: {
@@ -78,12 +76,15 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2022-05-01' = {
   properties: {
     supportsHttpsTrafficOnly: true
     accessTier: 'Hot'
+    allowBlobPublicAccess: false
   }
 }
 
-resource functionApp 'Microsoft.Web/sites@2020-12-01' = {
-  name: functionAppName
+// TODO: Create two functions. One to send orders, another to persist
+resource orderGenerator 'Microsoft.Web/sites@2020-12-01' = {
+  name: orderGeneratorName
   location: location
+  tags: tags
   kind: 'functionapp'
   properties: {
     serverFarmId: appServicePlan.outputs.appPlanId
@@ -91,11 +92,76 @@ resource functionApp 'Microsoft.Web/sites@2020-12-01' = {
       appSettings: [
         {
           name: 'AzureWebJobsStorage'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, storageAccount.apiVersion).keys[0].value}'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${orderGeneratorStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(orderGeneratorStorage.id, orderGeneratorStorage.apiVersion).keys[0].value}'
         }
         {
           name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, storageAccount.apiVersion).keys[0].value}'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${orderGeneratorStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(orderGeneratorStorage.id, orderGeneratorStorage.apiVersion).keys[0].value}'
+        }
+        {
+          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
+          value: appInsights.outputs.instrumentationKey
+        }
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: 'InstrumentationKey=${appInsights.outputs.instrumentationKey}'
+        }
+        {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: runtime
+        }
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
+          name: 'ServiceBusConnection__fullyQualifiedNamespace'
+          value: serviceBus.properties.serviceBusEndpoint
+        }
+        {
+          name: 'ActivityQueueName'
+          value: orderQueue.name
+        }
+      ]
+    }
+    httpsOnly: true
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+}
+
+resource orderProcessorStorage 'Microsoft.Storage/storageAccounts@2022-05-01' = {
+  name: orderProcessorStorageName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    supportsHttpsTrafficOnly: true
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+  }
+}
+
+resource orderProcessor 'Microsoft.Web/sites@2022-03-01' = {
+  name: orderProcessorName
+  location: location
+  tags: tags
+  kind: 'functionapp'
+  properties: {
+    serverFarmId: appServicePlan.outputs.appPlanId
+    siteConfig: {
+      appSettings: [
+        {
+          name: 'AzureWebJobsStorage'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${orderProcessorStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(orderProcessorStorage.id, orderProcessorStorage.apiVersion).keys[0].value}'
+        }
+        {
+          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${orderProcessorStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(orderProcessorStorage.id, orderProcessorStorage.apiVersion).keys[0].value}'
         }
         {
           name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
@@ -221,20 +287,20 @@ resource orderQueue 'Microsoft.ServiceBus/namespaces/queues@2022-01-01-preview' 
 }
 
 resource serviceBusReceiverRole 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid(serviceBus.id, functionApp.id, serviceBusDataReceiverRole)
+  name: guid(serviceBus.id, orderGenerator.id, serviceBusDataReceiverRole)
   scope: serviceBus
   properties: {
-    principalId: functionApp.identity.principalId
+    principalId: orderGenerator.identity.principalId
     roleDefinitionId: serviceBusDataReceiverRole
     principalType: 'ServicePrincipal'
   }
 }
 
 resource serviceBusSenderRole 'Microsoft.Authorization/roleAssignments@2020-08-01-preview' = {
-  name: guid(serviceBus.id, functionApp.id, serviceBusDataSenderRole)
+  name: guid(serviceBus.id, orderProcessor.id, serviceBusDataSenderRole)
   scope: serviceBus
   properties: {
-    principalId: functionApp.identity.principalId
+    principalId: orderProcessor.identity.principalId
     roleDefinitionId: serviceBusDataSenderRole
     principalType: 'ServicePrincipal'
   }
@@ -244,6 +310,6 @@ module sqlRoleAssignment 'modules/sqlRoleAssignment.bicep' = {
   name: 'sqlRoleAssignment'
   params: {
     cosmosDbAccountName: cosmosAccount.name
-    functionAppPrincipalId: functionApp.identity.principalId
+    functionAppPrincipalId: orderProcessor.identity.principalId
   }
 }
