@@ -36,6 +36,22 @@ jobs:
           resourceGroupName: ${{ secrets.AZURE_RG }}
           template: ./deploy/main.bicep
           deploymentMode: Validate
+  
+  scan-bicep-code:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Sign into Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Run Microsoft Security DevOps Analysis
+        uses: microsoft/security-devops-action@preview
+        id: msdo
+        with:
+          categories: 'IaC'
 
   preview:
     needs: [lint, validate]
