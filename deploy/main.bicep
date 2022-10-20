@@ -39,41 +39,32 @@ var tags = {
 var serviceBusDataReceiverRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions','4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
 var serviceBusDataSenderRole = subscriptionResourceId('Microsoft.Authorization/roleDefinitions','69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: logAnalyticsName
-  location: location
-  tags: tags
-  properties: {
-   sku: {
-    name: 'PerGB2018'
-   }
-   publicNetworkAccessForIngestion: 'Enabled'
-   publicNetworkAccessForQuery: 'Enabled' 
+module logAnalytics 'modules/logAnalytics.bicep' = {
+  name: 'law'
+  params: {
+    location: location 
+    logAnalyticsName: logAnalyticsName
+    tags: tags
   }
 }
 
-resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
-  name: appInsightsNamespaceName
-  location: location
-  tags: tags
-  kind: 'web'
-  properties: {
-    Application_Type: 'web'
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
-    WorkspaceResourceId: logAnalytics.id
+module appServicePlan 'modules/appServicePlan.bicep' = {
+  name: 'appServicePlan'
+  params: {
+    appServicePlanName: appServicePlanName 
+    location: location
+    tags: tags
   }
 }
 
-resource appServicePlan 'Microsoft.Web/serverfarms@2022-03-01' = {
-  name: appServicePlanName
-  location: location
-  tags: tags
-  kind: 'functionapp'
-  sku: {
-    name: 'Y1'
+module appInsights 'modules/appInsights.bicep' = {
+  name: 'appinsights'
+  params: {
+    appInsightsNamespaceName: appInsightsNamespaceName
+    location: location
+    logAnalyticsId: logAnalytics.outputs.workspaceId
+    tags: tags
   }
-  properties: {}
 }
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2022-05-01' = {
@@ -95,7 +86,7 @@ resource functionApp 'Microsoft.Web/sites@2020-12-01' = {
   location: location
   kind: 'functionapp'
   properties: {
-    serverFarmId: appServicePlan.id
+    serverFarmId: appServicePlan.outputs.appPlanId
     siteConfig: {
       appSettings: [
         {
@@ -108,11 +99,11 @@ resource functionApp 'Microsoft.Web/sites@2020-12-01' = {
         }
         {
           name: 'APPINSIGHTS_INSTRUMENTATIONKEY'
-          value: appInsights.properties.InstrumentationKey
+          value: appInsights.outputs.instrumentationKey
         }
         {
           name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: 'InstrumentationKey=${appInsights.properties.InstrumentationKey}'
+          value: 'InstrumentationKey=${appInsights.outputs.instrumentationKey}'
         }
         {
           name: 'FUNCTIONS_WORKER_RUNTIME'
