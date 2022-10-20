@@ -77,6 +77,7 @@ resource orderGeneratorStorage 'Microsoft.Storage/storageAccounts@2022-05-01' = 
     supportsHttpsTrafficOnly: true
     accessTier: 'Hot'
     allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
   }
 }
 
