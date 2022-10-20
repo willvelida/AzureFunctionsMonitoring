@@ -77,10 +77,10 @@ resource orderGeneratorStorage 'Microsoft.Storage/storageAccounts@2022-05-01' = 
     supportsHttpsTrafficOnly: true
     accessTier: 'Hot'
     allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
   }
 }
 
-// TODO: Create two functions. One to send orders, another to persist
 resource orderGenerator 'Microsoft.Web/sites@2020-12-01' = {
   name: orderGeneratorName
   location: location
@@ -143,6 +143,7 @@ resource orderProcessorStorage 'Microsoft.Storage/storageAccounts@2022-05-01' = 
     supportsHttpsTrafficOnly: true
     accessTier: 'Hot'
     allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
   }
 }
 
